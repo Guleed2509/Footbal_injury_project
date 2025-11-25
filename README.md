@@ -1,14 +1,14 @@
 🧠 Football Injury Prediction Project
 
-📌 Overview
+
 
 This project predicts football player injury risk using machine learning.
 It combines player performance, injury history, physical metrics, and workload into a predictive model that supports:
 
 Coaches → manage player workload and rotation
-Medical staff → monitor recovery and re-injury risk
+Medical staff → monitor recovery and re injury risk
 Analysts → identify key contributors to injuries
-The system uses a hybrid ML pipeline and is built in Python / scikit-learn / LightGBM.
+The system uses a hybrid ML pipeline and is built in Python / scikit-learn.
 
 🎯 Project Goals
 Build a machine learning pipeline to predict injuries before the next match
