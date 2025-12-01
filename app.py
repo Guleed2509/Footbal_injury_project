@@ -1,359 +1,236 @@
-import streamlit as st
+# ==============================
+# ⚽ Football Injury Risk Dashboard (Enhanced UI + English)
+# ==============================
+
+import os
+import numpy as np
 import pandas as pd
 import joblib
-import os
+import altair as alt
+import streamlit as st
 
-# -------------------------
-# 1. Config
-# -------------------------
-TARGET_COL = "injured_next_season"
-MODEL_PATH = "models/best_model_lightgbm.joblib"
-DATA_PATH = "data/processed/model_df.parquet"
 
-# -------------------------
-# 2. Load model & data (cached)
-# -------------------------
+# --------------------------------------------------
+# BASIC CONFIG
+# --------------------------------------------------
+MODEL_PATH = "models/best_model_local.joblib"
+
+st.set_page_config(
+    page_title="Player Injury Risk Dashboard",
+    page_icon="⚽",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+pd.options.mode.copy_on_write = True
+
+
+
+# --------------------------------------------------
+# MODEL + DATA HELPERS
+# --------------------------------------------------
 @st.cache_resource
 def load_model(path=MODEL_PATH):
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Model file not found at {path}")
+        raise FileNotFoundError(f"Model not found at {path}")
     return joblib.load(path)
-
-@st.cache_data
-def load_data(path=DATA_PATH):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Data file not found at {path}")
-    return pd.read_parquet(path)
-
-model = load_model()
-df = load_data()
-
-# -------------------------
-# 3. Helper: predict risk for one player
-# -------------------------
-def predict_next_match_risk(model, dataframe, player_id):
-    player_rows = dataframe[dataframe["player_id"] == player_id]
-
-    if len(player_rows) == 0:
-        return None, f"Player {player_id} not found in dataset."
-
-    # Use most recent season row
-    row = player_rows.sort_values("season_year").iloc[-1]
-
-    # Drop target if present
-    if TARGET_COL in row.index:
-        X = row.drop(TARGET_COL).to_frame().T
-    else:
-        X = row.to_frame().T
-
-    # Predict probability
-    prob = model.predict_proba(X)[0][1]
-
-    if prob > 0.7:
-        level = "HIGH"
-        color = "🔴"
-    elif prob > 0.4:
-        level = "MEDIUM"
-        color = "🟠"
-    else:
-        level = "LOW"
-        color = "🟢"
-
-    result = {
-        "player_id": int(row["player_id"]),
-        "team_name": row.get("team_name", "Unknown"),
-        "position": row.get("position", "Unknown"),
-        "season_year": int(row["season_year"]),
-        "injury_risk_next_match": float(prob),
-        "risk_level": level,
-        "risk_icon": color,
-    }
-    return result, None
-
-# -------------------------
-# 4. Streamlit layout
-# -------------------------
-st.set_page_config(
-    page_title="Football Injury Risk Dashboard",
-    page_icon="⚽",
-    layout="wide",
-)
-
-st.title("⚽ Football Injury Risk Dashboard")
-st.markdown(
-    """
-    This dashboard uses a machine learning model to estimate **injury risk for football players**
-    before the next match.
-
-    **What you can do:**
-    - Inspect injury risk for a single player
-    - See the top players with highest predicted risk
-    - Explore the underlying dataset
-    """
-)
-
-# Sidebar
-st.sidebar.header("Navigation")
-view = st.sidebar.radio(
-    "Select view",
-    ["🔍 Single Player Risk", "📈 Top Risk Players", "📊 Dataset Overview"]
-)
-
-# -------------------------
-# View 1: Single Player
-# -------------------------
-if view == "🔍 Single Player Risk":
-    st.subheader("🔍 Single Player Injury Risk")
-
-    unique_players = sorted(df["player_id"].unique())
-    player_id = st.sidebar.selectbox("Select a player_id", unique_players)
-
-    if st.sidebar.button("Predict risk"):
-        result, error = predict_next_match_risk(model, df, player_id)
-        if error:
-            st.error(error)
-        else:
-            st.markdown(
-                f"""
-                ### Player {result['player_id']} — {result['team_name']}
-                **Position:** {result['position']}
-                **Season:** {result['season_year']}
-
-                **Predicted Injury Risk (next match):**
-                {result['risk_icon']} **{result['risk_level']}**
-                _({result['injury_risk_next_match']:.2%} probability)_
-                """
-            )
-
-# -------------------------
-# View 2: Top Risk Players
-# -------------------------
-elif view == "📈 Top Risk Players":
-    st.subheader("📈 Top Predicted Risk Players")
-
-    n_top = st.sidebar.slider("Number of players to show", 5, 50, 10)
-
-    # Take latest season per player
-    df_latest = df.sort_values("season_year").groupby("player_id").tail(1)
-
-    # Drop target if present
-    if TARGET_COL in df_latest.columns:
-        X_latest = df_latest.drop(columns=[TARGET_COL])
-    else:
-        X_latest = df_latest.copy()
-
-    probs = model.predict_proba(X_latest)[:, 1]
-    df_latest = df_latest.copy()
-    df_latest["injury_risk_next_match"] = probs
-
-    def label_risk(p):
-        if p > 0.7:
-            return "HIGH"
-        elif p > 0.4:
-            return "MEDIUM"
-        else:
-            return "LOW"
-
-    df_latest["risk_level"] = df_latest["injury_risk_next_match"].apply(label_risk)
-
-    df_top = df_latest.sort_values("injury_risk_next_match", ascending=False).head(n_top)
-
-    st.dataframe(
-        df_top[["player_id", "team_name", "position", "season_year",
-                "injury_risk_next_match", "risk_level"]]
-        .reset_index(drop=True)
-        .style.format({"injury_risk_next_match": "{:.2%}"})
-    )
-
-# -------------------------
-# View 3: Dataset Overview
-# -------------------------
-elif view == "📊 Dataset Overview":
-    st.subheader("📊 Dataset Overview")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Rows", len(df))
-    with col2:
-        st.metric("Unique players", df["player_id"].nunique())
-    with col3:
-        st.metric("Seasons", df["season_year"].nunique())
-
-    st.write("Columns:")
-    st.write(list(df.columns))
-
-    st.write("Sample (first 20 rows):")
-    st.dataframe(df.head(20))
-import numpy as np
-import joblib
-import altair as alt
-
-# --------------------------------------------------
-# SPEED MODE CONFIG
-# --------------------------------------------------
-st.set_page_config(page_title="Player Injury Risk Dashboard", layout="wide")
-pd.options.mode.copy_on_write = True  # ⚡ pandas sneller & memory-safe
-
-
-# --------------------------------------------------
-# MODEL + DATA CACHING
-# --------------------------------------------------
-@st.cache_resource
-def load_model():
-    return joblib.load("models/best_model_local.joblib")
 
 
 @st.cache_data(show_spinner=False)
-def load_parquet_fast(file):
-    return pd.read_parquet(file, engine="pyarrow")  # ⚡ sneller dan default read
+def load_fast_parquet(file):
+    return pd.read_parquet(file, engine="pyarrow")
 
 
 @st.cache_data(show_spinner=True)
-def add_predictions(df, _model=None, batch_size=50000):   # ⚡ batch predictor
-    REQUIRED_COLUMNS = [
-        "player_id", "season_year",
-        "minutes_played","goals","assists","yellow_cards",
-        "clean_sheets","goals_conceded","nb_on_pitch","nb_in_group",
-        "matches_estimated","intensity_minutes_per_match","workload_actions",
-        "past_injuries","total_injuries_cumulative","past_days_missed",
-        "injury_severity_score","age","height","position","team_name",
-        "age_bucket"
+def add_predictions(df, _model, batch_size=50_000):
+
+    required_cols = [
+        "player_id","season_year","minutes_played","goals","assists","yellow_cards",
+        "clean_sheets","goals_conceded","nb_on_pitch","nb_in_group","matches_estimated",
+        "intensity_minutes_per_match","workload_actions","past_injuries",
+        "total_injuries_cumulative","past_days_missed","injury_severity_score",
+        "age","height","position","team_name","age_bucket"
     ]
 
-    missing = set(REQUIRED_COLUMNS) - set(df.columns)
+    missing = set(required_cols) - set(df.columns)
     if missing:
-        raise ValueError(f"Kolommen ontbreken in dataset: {missing}")
+        raise ValueError(f"Missing columns: {missing}")
 
-    df=df.copy()
+    df = df.copy()
+    proba = np.zeros(len(df))
 
-    # ⚡ Batch predict → voorkomt RAM overschrijding bij grote df
-    proba = np.zeros(df.shape[0],dtype=np.float32)
-    for i in range(0,len(df),batch_size):
-        chunk=df.iloc[i:i+batch_size][REQUIRED_COLUMNS]
-        proba[i:i+batch_size] = _model.predict_proba(chunk)[:,1]
+    for i in range(0, len(df), batch_size):
+        chunk = df.iloc[i: i+batch_size][required_cols]
+        proba[i:i+batch_size] = model.predict_proba(chunk)[:,1]
 
-    df["injury_risk"] = proba
-
-    df["risk_level"] = pd.cut(
-        df["injury_risk"],
-        bins=[0,0.33,0.66,1.0],
-        labels=["Low","Medium","High"],
-        include_lowest=True
-    )
-
+    df["injury_risk"] = proba * 100
+    df["risk_level"] = pd.cut(df["injury_risk"],
+                             bins=[0,33,66,100],
+                             labels=["Low","Medium","High"])
     return df
 
 
-# --------------------------------------------------
-# UI LAYOUT
-# --------------------------------------------------
-st.title("⚽ Player Injury Risk Dashboard")
 
-# load model once
+# --------------------------------------------------
+# SIDEBAR
+# --------------------------------------------------
 with st.sidebar:
-    st.subheader("Model status")
-    model = load_model()
-    st.success("Model geladen ✓")
+    st.markdown("### ⚙️ Model & Data Control")
+    try:
+        model = load_model()
+        st.success("Model loaded successfully ✓")
+    except Exception as e:
+        st.error(e); st.stop()
+
+    st.write("---")
+    st.markdown("Upload your processed data file below.")
+
+    uploaded_file = st.file_uploader("📁 Upload `model_df.parquet`", type=["parquet"])
+
 
 
 # --------------------------------------------------
-# DATA UPLOAD — NU DIRECT SNEL
+# HEADER
 # --------------------------------------------------
-file = st.file_uploader("Upload jouw `model_df.parquet`", type=["parquet"])
+st.markdown("<h1 style='color:#0077ff;'>⚽ Player Injury Risk Dashboard</h1>", unsafe_allow_html=True)
+st.write(
+"""
+Machine learning-powered injury risk evaluation for football athletes.
 
-if file is None:
-    st.info("Upload eerst je training-dataset `model_df.parquet`")
+**The percentage displayed = predicted chance of injury within the next match.**
+Use as decision support — not medical replacement.
+"""
+)
+
+
+
+# --------------------------------------------------
+# LOAD & APPLY MODEL
+# --------------------------------------------------
+if uploaded_file is None:
+    st.info("Upload your dataset to continue.")
     st.stop()
 
 try:
-    df = load_parquet_fast(file)       # ⚡ sneller parquet inladen
-    df = add_predictions(df,_model=model)   # ⚡ batch prediction
+    df_raw = load_fast_parquet(uploaded_file)
+    df = add_predictions(df_raw, _model = model)
 except Exception as e:
-    st.error(f"🚨 Fout bij laden of berekenen:\n\n{e}")
-    st.stop()
+    st.error(e); st.stop()
 
+st.success(f"Dataset loaded: **{df.shape[0]:,} rows / {df.shape[1]} columns**")
+st.caption("Model operates on global dataset — not limited to one squad.")
 
-st.caption(f"Dataset geladen: {df.shape[0]:,} rijen — {df.shape[1]} kolommen")
-
-
-# --------------------------------------------------
-# FILTERS (NU 6-12× sneller bij grote datasets)
-# --------------------------------------------------
-has_position="position" in df
-has_age="age" in df
-has_team="team_name" in df
-
-c1,c2,c3,c4 = st.columns(4)
-
-with c1:
-    pos=st.selectbox("Position", ["All"]+sorted(df["position"].unique()) if has_position else ["All"])    
-
-with c2:
-    if has_age:
-        min_age,max_age=int(df.age.min()),int(df.age.max())
-        age=st.slider("Age Range",min_age,max_age,(min_age,max_age))
-    else:
-        age=None
-
-with c3:
-    team=st.selectbox("Team",["All"]+sorted(df.team_name.unique()) if has_team else ["All"])
-
-with c4:
-    risk=st.selectbox("Risk Level",["All","Low","Medium","High"])
 
 
 # --------------------------------------------------
-# FILTER LOGIC — VECTORIZED & FAST
+# FILTER PANEL — BEAUTIFIED
 # --------------------------------------------------
-filtered=df
+st.markdown("## 🎛 Player Filtering Panel")
+st.write("Filter the dataset to view groups, squads, and performance risk groups.")
 
-if has_position and pos!="All":  filtered=filtered.loc[filtered.position==pos]
-if has_age and age:              filtered=filtered.loc[filtered.age.between(age[0],age[1])]
-if has_team and team!="All":     filtered=filtered.loc[filtered.team_name==team]
-if risk!="All":                  filtered=filtered.loc[filtered.risk_level==risk]
+col1,col2,col3,col4 = st.columns(4)
+
+with col1:
+    pos = st.selectbox("Position", ["All"] + sorted(df.position.unique()))
+
+with col2:
+    age = st.slider("Age Range",16,40,(18,34))
+
+with col3:
+    team = st.selectbox("Team",["All"] + sorted(df.team_name.unique()))
+
+with col4:
+    rfilter = st.selectbox("Risk Level",["All","Low","Medium","High"])
+
+
+filtered = df.copy()
+if pos!="All": filtered = filtered[df.position==pos]
+if team!="All": filtered = filtered[df.team_name==team]
+filtered = filtered[filtered.age.between(age[0],age[1])]
+if rfilter!="All": filtered = filtered[filtered.risk_level==rfilter]
 
 if filtered.empty:
-    st.warning("⚠ Geen spelers gevonden met deze filters.")
-    st.stop()
+    st.warning("No players match selected filters."); st.stop()
+
 
 
 # --------------------------------------------------
-#  UI blijft verder IDENTIEK aan jouw originele code
-#  (Hieronder alleen micro-optimisaties)
+# TEAM RISK DISTRIBUTION – MORE COLORFUL BAR
 # --------------------------------------------------
+st.markdown("## 📊 Risk Distribution Overview")
+st.write("Shows injury-risk composition of the selected player group.")
 
-st.markdown("### 🧮 Team Risk Summary")
+colA,colB = st.columns([1.4,0.8])
 
-counts = filtered["risk_level"].value_counts(normalize=True).reindex(["Low","Medium","High"]).fillna(0)
-risk_df=pd.DataFrame({"Risk":["Low","Medium","High"],"Pct":counts.values*100})
+with colA:
+    risk_counts = filtered.risk_level.value_counts(normalize=True).reindex(["Low","Medium","High"]).fillna(0)*100
+    chart_df = pd.DataFrame({"Risk":["Low","Medium","High"],"Percent":risk_counts.values})
 
-st.altair_chart(
-    alt.Chart(risk_df).mark_bar().encode(
-        x=alt.X("Risk:N"),
-        y=alt.Y("Pct:Q"),
-        color=alt.Color("Risk:N"),
-        tooltip=["Risk","Pct"]
-    ),
+    chart = alt.Chart(chart_df).mark_bar(size=60,cornerRadiusTopLeft=5,cornerRadiusTopRight=5).encode(
+        x=alt.X("Risk:N",title="Risk Classification"),
+        y=alt.Y("Percent:Q",title="Percent of Players",scale=alt.Scale(domain=[0,100])),
+        color=alt.Color("Risk:N", scale=alt.Scale(
+            domain=["Low","Medium","High"],
+            range=["#00e676","#f4d03f","#ff4d4d"]  # VIBRANT COLORS 🔥
+        )),
+        tooltip=["Risk","Percent"]
+    )
+    st.altair_chart(chart,use_container_width=True)
+
+with colB:
+    st.metric("Total Players",len(filtered))
+    st.metric("High Risk",(filtered.risk_level=="High").sum())
+    st.metric("Medium Risk",(filtered.risk_level=="Medium").sum())
+    st.metric("Low Risk",(filtered.risk_level=="Low").sum())
+
+
+
+# --------------------------------------------------
+# RANK TABLE (TOP 50)
+# --------------------------------------------------
+st.markdown("## 🏆 Ranked Risk Table (Top 50)")
+ranked = filtered.sort_values("injury_risk",ascending=False)
+ranked["injury_risk"] = ranked.injury_risk.round(1)
+
+st.dataframe(
+    ranked[["player_id","team_name","position","age","height","injury_risk","risk_level"]].head(50),
     use_container_width=True
 )
 
-left,right=st.columns([2,1])
-
-with left:
-    st.markdown("### 📋 Players (Highest Risk First)")
-    tmp=filtered.sort_values("injury_risk",ascending=False).copy()
-    tmp["injury_risk"]=(tmp.injury_risk*100).round(1)
-    st.dataframe(tmp.head(50),use_container_width=True)
-
-with right:
-    st.markdown("### 🧑 Player Profile (Detailed)")
-    players=tmp["player_id"].astype(str).tolist()
-    selected=st.selectbox("Select Player",players)
-    p=tmp.loc[tmp["player_id"].astype(str)==selected].iloc[0]
-
-    st.markdown(f"**ID:** {p.player_id}")
-    st.markdown(f"**Team:** {p.team_name}")
-    st.markdown(f"**Age:** {p.age}")
 
 
+# --------------------------------------------------
+# PLAYER PROFILE
+# --------------------------------------------------
+st.markdown("## 👤 Individual Player Report")
 
+L,R = st.columns([1.5,1])
+
+with L:
+    selected = st.selectbox("Select Player",ranked.player_id.astype(str))
+    p = ranked[ranked.player_id.astype(str)==selected].iloc[0]
+
+    st.markdown(f"### 🏷 Player `{p.player_id}` — {p.team_name}")
+    st.write(f"**Position:** {p.position}")
+    st.write(f"**Age:** {p.age} | **Height:** {p.height} cm")
+    st.write(f"**Age Class:** {p.age_bucket}")
+
+    st.write("---")
+    st.markdown("### 🔍 Risk Contributors (Key Features) ")
+    st.write(f"• Past injuries: **{p.past_injuries}**")
+    st.write(f"• Total injury days: **{p.past_days_missed}**")
+    st.write(f"• Workload actions: **{p.workload_actions}**")
+    st.write(f"• High-intensity minutes: **{p.intensity_minutes_per_match}**")
+    st.caption("Higher workload + past injury load increases risk profile.")
+
+
+with R:
+    risk = p.injury_risk
+    st.subheader("🧠 Injury Risk Prediction")
+
+    st.metric("Estimated Injury Probability",f"{risk:.1f} %")
+    if risk>=70: st.error("🔴 VERY HIGH RISK — Reduce load + medical evaluation recommended.")
+    elif risk>=40: st.warning("🟠 ELEVATED RISK — Monitor intensity and recovery.")
+    else: st.success("🟢 LOW RISK — Player appears fit & healthy.")
+
+    st.caption("This probability refers to the upcoming match window — not long-term risk.")
